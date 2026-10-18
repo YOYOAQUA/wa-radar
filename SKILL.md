@@ -1,6 +1,6 @@
 ---
 name: wa-radar
-description: "Turns Claude into a personal chief of staff for WhatsApp: reads WhatsApp Desktop's local database on a Mac (a read-only copy, nothing is ever sent or changed) or chats exported from the phone, and finds who is waiting for an answer, leads that were never answered, promises the user made, tasks, requests in groups that match what they sell, business opportunities, new project ideas and relationships that went quiet. Builds a local dashboard with one-click reply drafts and a daily morning brief. Hebrew first, for non-technical business owners and creators. Use when the user says: תתקין לי את הרדאר, תריץ לי את הרדאר, תעבור לי על הוואטסאפ, מי מחכה לתשובה ממני, מה פספסתי בוואטסאפ, תמצא לי לידים בוואטסאפ, מה המשימות שלי, הזדמנויות עסקיות בוואטסאפ, תדריך בוקר, מה סיכמתי עם, תסכם לי את הקבוצה."
+description: "Turns Claude into a personal chief of staff for WhatsApp: reads WhatsApp Desktop's local database on a Mac (a read-only copy, nothing is ever sent or changed) or chats exported from the phone, listens to voice notes (transcribes Hebrew voice messages on the computer and pulls out what was asked, dates, prices and promises), and finds who is waiting for an answer, leads that were never answered, promises the user made, tasks, requests in groups that match what they sell, connections the user never noticed (who works where, who knows whom, intro paths to the clients they want), business opportunities, new project ideas and relationships that went quiet. Builds a local dashboard with one-click reply drafts and a daily morning brief. Hebrew first, for non-technical business owners and creators. Use when the user says: תתקין לי את הרדאר, תריץ לי את הרדאר, תעבור לי על הוואטסאפ, מי מחכה לתשובה ממני, מה פספסתי בוואטסאפ, תמצא לי לידים בוואטסאפ, מה המשימות שלי, הזדמנויות עסקיות בוואטסאפ, תדריך בוקר, מה סיכמתי עם, תסכם לי את הקבוצה, מה אמרו לי בהקלטות, תתמלל לי את ההקלטות."
 license: MIT
 compatibility: "Claude Code (desktop app Code tab). Full version: macOS with the WhatsApp Desktop app. Short version (exported chats): Mac or Windows."
 metadata:
@@ -44,9 +44,11 @@ The engine is one script, called through the wrapper:
 | `promises [--days 90]` | the user's own "אשלח / אבדוק / אחזור אליך" and what happened after |
 | `asks [--days 60] --kw "a,b"` | requests and recommendations in groups that match what they sell, plus busy groups where they never write |
 | `cold [--min 40] [--silent 60]` | real relationships (many messages both ways) that went quiet |
+| `people [--days 365] [--min 15]` | **who the people are**: shared groups, WhatsApp business name and "about" line, sentences about work and who knows whom, and "rooms" (groups full of people they already talk to) |
+| `linkedin Connections.csv` | the user's OWN LinkedIn connections export; `people` then adds role and company for names that match |
 | `brief [--hours 24] [--kw ..] [--me "name,nick"]` | everything new since yesterday, with ★ on group messages that mention them or ask for what they do |
 | `export --chat "name" [--days 365]` or `--all [--groups]` | full text of chosen chats, for questions like "מה סיכמתי עם דנה?" |
-| `voice [--days 14] [--limit 60]` | transcribes voice notes into the packs (optional, after `voice-setup`) |
+| `voice [--days 14 \| --hours 24] [--from-packs \| --chat "name"]` | **listens to voice notes**: transcribes them on this computer (after `voice-setup`), puts the text into every pack, and writes `packs/voice.md` (every note with context) |
 | `import FILE.zip [--me "name"]` | a chat exported from the phone (the short path) |
 | `dashboard reports/X.json [--open]` | builds the HTML dashboard from your report |
 | `clean` | deletes the copy and the packs (keeps profile, reports, imports, transcripts) |
@@ -70,7 +72,9 @@ Tell them: about 5 minutes, nothing is installed inside WhatsApp, and deleting `
 3. Run `check`. If macOS asks "Claude would like to access data from other apps", tell them to press **Allow**.
    If it says `PERMISSION`: System Settings → Privacy & Security → Full Disk Access → turn on **Claude** → quit and reopen Claude.
 4. Report in 3 lines what you see: how many chats, from when, how many messages this month.
-5. Build the profile (B), then offer the first radar (C).
+5. **Voice notes are a core feature.** Say: "הרבה מהדברים החשובים מגיעים בהקלטה. אני יכול להקשיב להן בשבילך."
+   Start `voice-setup` in the background now (a Hebrew speech model, ~1.6GB once, 5-15 minutes) while you build the profile.
+6. Build the profile (B), then offer the first radar (C).
 
 ## B. The profile (`~/WaRadar/profile.md`)
 
@@ -96,11 +100,15 @@ Read it before every analysis. Use its kw list for `--kw` and its names for `--m
 
 ## C. The full radar ("תריץ לי את הרדאר")
 
-1. Run, one after another: `waiting`, `leads --kw "<kw>"`, `promises`, `asks --kw "<kw>"`, `cold`.
+1. Run, one after another: `waiting`, `leads --kw "<kw>"`, `promises`, `asks --kw "<kw>"`, `cold`, `people`.
    Say one line per pack ("מצאתי 41 שיחות שמחכות לך, עובר עליהן").
+   If the speech engine is installed, start `voice --from-packs --days <same days>` in the background: it listens to the
+   voice notes inside the chats the packs found, newest first. Tell them how long it will take (the command prints it).
 2. **Read every pack completely. No skipping.** Decide for each item: real and still open? worth their time?
    Drop businesses, bots, things clearly closed later, and anything on the profile's skip list.
    Learn how the user writes from their own lines ("אני: ...") so drafts sound like them.
+   When the voice run finishes, read `packs/voice.md` completely and add what came from voice notes: requests, dates,
+   prices, decisions, and promises the user made in their own voice notes. Mark those items with 🎙️ in `meta`.
 3. Write `~/WaRadar/reports/radar-YYYY-MM-DD.json` (format below), then run `dashboard reports/radar-YYYY-MM-DD.json --open`.
 4. In the chat, give the **top 5** in plain Hebrew (who, what, why now), and ask: "עם מה מתחילים?"
 
@@ -115,6 +123,8 @@ Sections, in this order (skip empty ones):
 | `opps` | 🚀 הזדמנויות עסקיות | patterns: a group where clients ask weekly and they never write, a partner who refers people, a repeat client |
 | `ideas` | 💡 רעיונות לפרויקטים | questions people ask again and again (a product or content idea), collaborations that were offered, unmet demand |
 | `cold` | 🔥 קשרים לחמם | quiet relationships worth a message, with a natural reason to write |
+| `links` | 🔗 חיבורים שלא חשבת עליהם | see H2: who can introduce the user to whom, with a draft asking for the intro |
+| `voice` | 🎙️ מה אמרו לך בהקלטות | per person: what they said in voice notes, what they need, and what you promised (short quotes, flagged as transcription) |
 
 ### report.json
 ```json
@@ -147,6 +157,7 @@ Sections, in this order (skip empty ones):
 
 ## E. Morning brief ("תעשה לי תדריך בוקר כל יום")
 If a scheduled-tasks tool is available, create a daily task (default 08:00) with this prompt, filled in:
+> If voice is set up, first run `~/WaRadar/wr voice --hours 26` (listens to yesterday's voice notes).
 > Run `~/WaRadar/wr brief --hours 24 --kw "<kw>" --me "<names>"`. Read packs/brief.md fully, plus profile.md.
 > Write ~/WaRadar/reports/brief-<date>.json in the wa-radar format with sections: ⏳ מחכים לך היום, ✅ משימות, 📣 בקבוצות, 💡 שווה לדעת.
 > Run `~/WaRadar/wr dashboard reports/brief-<date>.json --open`. Then write a 5-line summary in Hebrew. Never send messages.
@@ -154,10 +165,31 @@ If a scheduled-tasks tool is available, create a daily task (default 08:00) with
 Tell them it runs while the Claude app is open (if it was closed, it runs when it opens).
 No scheduled-tasks tool? Explain how to add it by hand: Claude app → Scheduled → New task, and give them the prompt.
 
-## F. Voice notes (optional, "גם ההקלטות")
-Many important things arrive as voice notes. `voice-setup` installs a Hebrew speech model once (~1.6GB, 5-15 minutes).
-Then `voice --days 14` transcribes the recent ones on the computer (free and private, roughly real time;
-run it in the background and report progress). From then on every pack shows `[הקלטה קולית 0:42] «text»`.
+## F. Voice notes: Claude listens ("מה אמרו לי בהקלטות", "תתמלל לי את ההקלטות")
+A core feature, not an extra: many of the important things (a price, a date, "can you send me...", the user's own
+"I'll get back to you") arrive as voice notes nobody has time to replay.
+- Once: `voice-setup` (Hebrew speech model from ivrit.ai, ~1.6GB, 5-15 minutes). Free, and the audio never leaves the computer
+  for transcription; only the text is read by you, like any message.
+- `voice --days 14` (or `--hours 24`, `--from-packs`, `--chat "דנה"`) transcribes on the computer, roughly 0.3-0.8x the audio length.
+  Run it in the background and report progress. Voice notes not downloaded to the Mac are counted; opening them once in WhatsApp downloads them.
+- From then on every pack shows `[הקלטה קולית 0:42] «text»`, and `packs/voice.md` lists every note with one message of context.
+- **Extract, don't just transcribe:** for each person, what they asked for, dates and times, amounts, addresses, decisions,
+  and what the user promised in their own voice notes. It is machine transcription: quote briefly, flag anything unclear
+  (names and numbers can be wrong), never fill gaps.
+
+## H2. Connections ("חיבורים", "מי יכול להכיר לי את", "דרך מי אפשר להגיע ל")
+The user does not have time to remember that their cousin knows an event producer, or that a friend from the running
+group works in HR at a company they want as a client. You do. From `people` (and `voice.md`, `asks`, the profile):
+- **Who is who:** work context only (role, company, field), from what is actually there: what they wrote, shared groups
+  ("מנהלות רווחה", "מפיקי אירועים"), WhatsApp business name, "about" line, the user's own LinkedIn export if imported.
+- **Who knows whom:** "הבן דוד שלי מפיק", "יש לי חברה ב-HR של...", "אחבר אותך", a person active in a group full of the user's target clients.
+- **Paths:** match these to the profile's ideal clients and goal: "רוני (בן דוד) הזכיר ב-3.6 חברה שמפיקה אירועים. בקש היכרות."
+- Each item: the connection, the evidence (who, where, when), why it matters for the user's goal, and a short warm draft
+  asking for the intro (never asking for anything awkward).
+- **Limits, say them plainly:** you see only the user's own data. You cannot see other people's LinkedIn or contacts.
+  Never search the web about private people, never guess sensitive traits, and say how sure you are.
+- LinkedIn: the user can export their own connections (LinkedIn → Settings → Data privacy → Get a copy of your data →
+  Connections), then `linkedin <file>` and run `people` again.
 
 ## G. Recording mode (for a video or a screen share)
 Add `--mask` to every command **and** to `dashboard`. Names become "איש קשר 12", groups "קבוצה 3", numbers are hidden,
