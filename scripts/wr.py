@@ -17,8 +17,11 @@ It never writes to WhatsApp and never sends anything.
   wr asks     [--days 60] [--kw "a,b"]   requests in groups (+ groups where I'm silent)
   wr cold     [--min 40] [--silent 60]   relationships that went quiet
   wr brief    [--hours 24] [--kw "a,b"] [--me "name,nick"]
+  wr people   [--days 365] [--min 15]     who the people are: shared groups, work, who knows whom (connections)
+  wr linkedin Connections.csv            your own LinkedIn connections export, matched by name in 'people'
   wr export   (--chat TEXT | --all) [--days 30] [--groups]
-  wr voice    [--days 14] [--limit 60] [--groups]    transcribe voice notes (optional)
+  wr voice    [--days 14 | --hours 24] [--from-packs | --chat TEXT] [--limit 80] [--groups] [--pack-only]
+                                         listen to voice notes: transcribe them on this computer and write packs/voice.md
   wr voice-setup                         install the Hebrew speech model (once)
   wr import   FILE.zip|FILE.txt [--me NAME]          chat exported from the phone
   wr dashboard REPORT.json [--open]
@@ -83,10 +86,19 @@ AUTO_RE = re.compile(r"לא קיבלנו את תגובתך|פנייתך נסגר
                      r"הודעה אוטומטית|קוד האימות|קוד אימות|verification code|מספר הזמנה|חשבונית|תזכורת לתור|"
                      r"לאישור השב|לביטול השב|השב 1|השיבו 1|wa\.me/|bit\.ly|לפרטים נוספים לחצו", re.I)
 _SCRUB = lambda t: t  # replaced by Model.scrub in recording mode
+ROLE_RE = re.compile(r"אני עובד|אני עובדת|עובד ב|עובדת ב|עובד אצל|עובדת אצל|מנהל |מנהלת |סמנכ|מנכ\"ל|מנכל|יו\"ר|בעלים של|"
+                     r"הבעלים|מייסד|מייסדת|שותף ב|שותפה ב|\bHR\b|משאבי אנוש|רווחה|מפיק|מפיקה|הפקות|יועץ|יועצת|עורך דין|עורכת דין|"
+                     r"רואה חשבון|סוכן|סוכנת|מגייס|מגייסת|בחברת|בארגון|בעירייה|במשרד של|בן דוד|בת דודה|הבן דוד|הבת דודה|אחי |אחותי|"
+                     r"גיסי|גיסתי|חבר שלי|חברה שלי|חברה טובה|מכיר מישהו|מכירה מישהו|מכיר מישהי|מכירה מישהי|אחבר אותך|אחבר ביניכם|"
+                     r"אכיר לך|אעביר לך את המספר|תדבר עם|תדברי עם|יש לי חבר|יש לי חברה|מכיר את|מכירה את|היכרות|הכרות|תכיר את|תכירי את|"
+                     r"מכיר אנשים|מכירה אנשים|קשרים ב|עבדתי ב|עבדתי עם")
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?972[\s-]?|0)(?:\d[\s-]?){8,9}(?!\d)")
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 
 
+COMMON_WORDS = set("""אני אתה את אנחנו הוא היא הם אבא אמא אחי אחות סבא סבתא בית יום טוב חיים אור שלום ים שמח שמחה
+אוהב אהבה תודה בוקר ערב לילה עבודה משרד חבר חברה מלך מלכה גבר אישה ילד ילדה מאמן מורה דוקטור רופא בוס כלב חתול
+שמש פרח לב אושר הדר נוי חן גל טל רז בר שי דור עוז""".split())
 B64_NAME = re.compile(r"^\+[A-Za-z0-9+/]{3,}={0,2}$")
 
 
@@ -344,9 +356,10 @@ class Model:
         text = PHONE_RE.sub("[מספר]", text)
         text = EMAIL_RE.sub("[מייל]", text)
         if self._names_re is None:
-            names = {c["name"] for c in self.chats.values() if c["kind"] == "private"}
-            names |= set(self.contact_lid.values()) | set(self.contact_phone.values()) | set(self.push.values())
-            names |= {m[1] for m in self.members.values() if m[1]} | {m[2] for m in self.members.values() if m[2]}
+            # full names from everywhere; first names only from saved contacts (push names are often plain words)
+            saved = {c["name"] for c in self.chats.values() if c["kind"] == "private"}
+            saved |= set(self.contact_lid.values()) | set(self.contact_phone.values())
+            names = saved | set(self.push.values()) | {m[1] for m in self.members.values() if m[1]}
             full, first = set(), set()
             for n in names:
                 n = (n or "").strip()
@@ -355,7 +368,7 @@ class Model:
                 if " " in n and len(n) >= 4:
                     full.add(n)
                 tok = re.split(r"[\s,.()|\-]+", n)[0]
-                if len(tok) >= 3 and re.fullmatch(r"[\u05D0-\u05EAA-Za-z']+", tok):
+                if n in saved and len(tok) >= 3 and tok not in COMMON_WORDS and re.fullmatch(r"[\u05D0-\u05EAA-Za-z']+", tok):
                     first.add(tok)
             alt = "|".join(map(re.escape, sorted(full | first, key=len, reverse=True)))
             # a name may carry a Hebrew prefix letter: לדנה, ודני, שמיכל
@@ -521,7 +534,7 @@ def cmd_check(a):
         import faster_whisper  # noqa: F401
         say(f"voice notes: speech model engine installed ({len(M.voice_text)} transcribed so far)")
     except Exception:
-        say("voice notes: not set up (optional: wr voice-setup)")
+        say("voice notes: not set up yet (recommended: wr voice-setup, ~1.6GB once)")
     prof = HOME / "profile.md"
     say(f"profile: {'ok' if prof.exists() else 'missing (create ' + str(prof) + ')'}")
 
@@ -779,50 +792,108 @@ def cmd_voice_setup(a):
     say("voice ready")
 
 
+def voice_chat_filter(M, a):
+    """Which chats to transcribe: named ones, the ones already in the packs, or all."""
+    if getattr(a, "chat", ""):
+        q = a.chat.lower()
+        ids = {c["pk"] for c in M.chats.values() if c["pk"] and q in c["name"].lower()}
+        if not ids:
+            die(f"no chat matches '{a.chat}'")
+        return ids
+    if getattr(a, "from_packs", False):
+        ids = set()
+        for f in PACKS.glob("*.md"):
+            if f.stem in ("waiting", "leads", "promises", "asks", "cold", "brief"):
+                ids |= {int(x) for x in re.findall(r"\[c(\d+)\]", f.read_text(encoding="utf-8"))}
+        if not ids:
+            die("no packs yet. run waiting / leads / promises first, or drop --from-packs")
+        return ids
+    return None
+
+
+def write_voice_pack(M, since, pks):
+    """Every transcribed voice note in the window, with one message of context on each side."""
+    ids = [c["id"] for c in M.chats.values() if c["pk"] and (pks is None or c["pk"] in pks)]
+    g = by_chat(M.messages(since, chat_ids=ids))
+    blocks, n_notes, secs, missing = [], 0, 0, 0
+    for cid, ms in sorted(g.items(), key=lambda kv: -kv[1][-1]["ts"]):
+        idx = [i for i, m in enumerate(ms) if m["type"] == 3]
+        if not idx:
+            continue
+        lines = []
+        for i in idx:
+            if "«" not in ms[i]["text"]:
+                missing += 1
+                continue
+            n_notes += 1
+            mm = re.search(r"(\d+):(\d\d)\]", ms[i]["text"])
+            secs += int(mm.group(1)) * 60 + int(mm.group(2)) if mm else 0
+            if i > 0 and ms[i - 1]["type"] != 3:
+                lines.append("  (לפני) " + line(ms[i - 1], 200))
+            lines.append("🎙️ " + line(ms[i], 4000))
+            if i + 1 < len(ms) and ms[i + 1]["type"] != 3:
+                lines.append("  (אחרי) " + line(ms[i + 1], 200))
+            lines.append("")
+        if lines:
+            blocks.append(head(M, M.chats[cid]) + "\n" + "\n".join(lines).rstrip())
+    intro = (f"{n_notes} הקלטות קוליות שתומללו ({secs // 60} דקות), מהחדש לישן, לפי שיחה. "
+             + (f"{missing} הקלטות עוד לא תומללו (wr voice). " if missing else "")
+             + "תמלול אוטומטי: שמות, מספרים וסכומים עלולים להשתבש, אז מצטטים בזהירות ולא ממציאים. "
+               "מה לחפש: מה ביקשו, תאריכים ושעות, מחירים, כתובות, מה הוחלט, ומה אני הבטחתי בהקלטות שלי.")
+    write_pack("voice", "מה אמרו לכם בהקלטות", intro, blocks, M)
+
+
 def cmd_voice(a):
     M = Model(a.mask)
     if not M.has_db:
-        die("voice notes need WhatsApp Desktop on a Mac")
-    try:
-        from faster_whisper import WhisperModel
-    except Exception:
-        die("speech engine not installed. run: wr voice-setup")
-    since = time.time() - a.days * 86400
-    kinds = (0, 1) if a.groups else (0,)
-    q = ("select m.Z_PK, mi.ZMEDIALOCALPATH, mi.ZMOVIEDURATION from ZWAMESSAGE m join ZWAMEDIAITEM mi on mi.Z_PK=m.ZMEDIAITEM "
-         "join ZWACHATSESSION s on s.Z_PK=m.ZCHATSESSION where m.ZMESSAGETYPE=3 and m.ZMESSAGEDATE > ? "
-         f"and s.ZSESSIONTYPE in ({','.join(map(str, kinds))}) and coalesce(s.ZHIDDEN,0)=0 order by m.ZMESSAGEDATE desc")
-    todo = []
-    for pk, rel, dur in M.db.execute(q, (since - APPLE,)):
-        if str(pk) in M.voice_text or not rel:
-            continue
-        for base in (WA_GROUP / "Message", WA_GROUP):
-            if (base / rel).exists():
-                todo.append((pk, base / rel, dur or 0))
-                break
-    todo = todo[:a.limit]
-    if not todo:
-        say("nothing new to transcribe")
-        return
-    mins = sum(d for _, _, d in todo) / 60
-    say(f"transcribing {len(todo)} voice notes (~{mins:.0f} min of audio). roughly real time on a laptop.")
-    model = WhisperModel(MODEL, device="cpu", compute_type="int8")
-    VOICE.mkdir(parents=True, exist_ok=True)
-    cache = M.voice_text
-    for i, (pk, path, dur) in enumerate(todo, 1):
-        tmp = HOME / ".tmp_voice.opus"
-        shutil.copy2(path, tmp)  # read from a copy, never from WhatsApp's folder directly
+        die("voice notes need WhatsApp Desktop on a Mac. Exported chats have no audio.")
+    since = time.time() - (a.hours * 3600 if a.hours else a.days * 86400)
+    pks = voice_chat_filter(M, a)
+    if not a.pack_only:
         try:
-            segs, _ = model.transcribe(str(tmp), language="he", beam_size=1, vad_filter=True)
-            cache[str(pk)] = " ".join(s.text.strip() for s in segs).strip()
-        except Exception as e:
-            cache[str(pk)] = ""
-            say(f"  skip {pk}: {e}")
-        tmp.unlink(missing_ok=True)
-        (VOICE / "transcripts.json").write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-        if i % 5 == 0 or i == len(todo):
-            say(f"  {i}/{len(todo)}")
-    say("done. voice notes now appear as text in every pack.")
+            from faster_whisper import WhisperModel
+        except Exception:
+            die("speech engine not installed. run: wr voice-setup")
+        kinds = (0, 1) if a.groups or a.chat else (0,)
+        q = ("select m.Z_PK, m.ZCHATSESSION, mi.ZMEDIALOCALPATH, mi.ZMOVIEDURATION from ZWAMESSAGE m join ZWAMEDIAITEM mi "
+             "on mi.Z_PK=m.ZMEDIAITEM join ZWACHATSESSION s on s.Z_PK=m.ZCHATSESSION where m.ZMESSAGETYPE=3 and m.ZMESSAGEDATE > ? "
+             f"and s.ZSESSIONTYPE in ({','.join(map(str, kinds))}) and coalesce(s.ZHIDDEN,0)=0 order by m.ZMESSAGEDATE desc")
+        todo, not_local = [], 0
+        for pk, cpk, rel, dur in M.db.execute(q, (since - APPLE,)):
+            if str(pk) in M.voice_text or (pks is not None and cpk not in pks):
+                continue
+            path = next((base / rel for base in (WA_GROUP / "Message", WA_GROUP) if rel and (base / rel).exists()), None)
+            if path:
+                todo.append((pk, path, dur or 0))
+            else:
+                not_local += 1
+        todo = todo[:a.limit]
+        if not_local:
+            say(f"{not_local} voice notes are not downloaded to this computer (open them once in WhatsApp to download)")
+        if todo:
+            mins = sum(d for _, _, d in todo) / 60
+            say(f"transcribing {len(todo)} voice notes (~{mins:.0f} min of audio). "
+                f"expect about {max(1, round(mins * 0.3))}-{max(2, round(mins * 0.8))} minutes on a laptop, plus ~1 minute to load the model.")
+            model = WhisperModel(MODEL, device="cpu", compute_type="int8")
+            VOICE.mkdir(parents=True, exist_ok=True)
+            cache = M.voice_text
+            for i, (pk, path, dur) in enumerate(todo, 1):
+                tmp = HOME / ".tmp_voice.opus"
+                shutil.copy2(path, tmp)  # read from a copy, never from WhatsApp's folder directly
+                try:
+                    segs, _ = model.transcribe(str(tmp), language="he", beam_size=1, vad_filter=True)
+                    cache[str(pk)] = " ".join(s.text.strip() for s in segs).strip()
+                except Exception as e:
+                    cache[str(pk)] = ""
+                    say(f"  skip {pk}: {e}")
+                tmp.unlink(missing_ok=True)
+                (VOICE / "transcripts.json").write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+                if i % 5 == 0 or i == len(todo):
+                    say(f"  {i}/{len(todo)}")
+        else:
+            say("nothing new to transcribe")
+    write_voice_pack(M, since, pks)
+    say("voice notes now appear as text in every pack. Read packs/voice.md for what was said.")
 
 
 HDR_RES = [
@@ -897,6 +968,101 @@ def cmd_clean(a):
         elif p.exists():
             p.unlink()
     say("removed the database copy and packs. reports, profile, imports and voice transcripts were kept.")
+
+
+def cmd_people(a):
+    """Who are the people I talk to: work context, shared groups, who they know. For the 'connections' section."""
+    M = Model(a.mask)
+    since = time.time() - a.days * 86400
+    st = M.chat_stats()
+    # group membership, by phone digits
+    groups_of = {}
+    if M.has_db:
+        for jid, cpk, active in M.db.execute("select ZMEMBERJID, ZCHATSESSION, ZISACTIVE from ZWAGROUPMEMBER"):
+            c = M.chats.get(f"c{cpk}")
+            ph = M.phone_of(jid or "")
+            if c and c["kind"] == "group" and ph:
+                groups_of.setdefault(ph, set()).add(c["id"])
+    # WhatsApp business name and "about" line, by phone
+    about = {}
+    try:
+        k = sqlite3.connect(SNAP / "ContactsV2.sqlite")
+        for phone, text, biz in k.execute("select ZPHONENUMBER, ZABOUTTEXT, ZBUSINESSNAME from ZWAADDRESSBOOKCONTACT"):
+            d = re.sub(r"\D", "", phone or "")
+            if d and (text or biz):
+                about[d] = ((biz or "").strip(), (text or "").strip())
+    except sqlite3.Error:
+        pass
+    li = {}
+    lp = IMPORTS / "linkedin.json"
+    if lp.exists():
+        for r in json.loads(lp.read_text(encoding="utf-8")):
+            li[norm(r["name"])] = r
+    people = [(s["n"], cid) for cid, s in st.items()
+              if M.chats.get(cid, {}).get("kind") == "private" and s["n"] >= a.min and s["last"] >= since]
+    people.sort(key=lambda x: -x[0])
+    people = people[:a.limit]
+    g = by_chat(M.messages(since, chat_ids=[cid for _, cid in people]))
+    blocks, overlap = [], {}
+    for n, cid in people:
+        c, s = M.chats[cid], st[cid]
+        gids = sorted(groups_of.get(c["phone"], ()), key=lambda x: M.chats[x]["name"])
+        for gid in gids:
+            overlap.setdefault(gid, []).append(cid)
+        info = []
+        if gids:
+            names = [M.chat_name(M.chats[x]) for x in gids]
+            info.append("קבוצות משותפות: " + ", ".join(names[:8]) + (f" ועוד {len(names) - 8}" if len(names) > 8 else ""))
+        biz, txt = about.get(c["phone"], ("", ""))
+        if biz:
+            info.append("עסק בוואטסאפ: " + M.scrub(biz))
+        if txt and len(txt) > 3:
+            info.append("אודות: " + M.scrub(cut(txt, 140)))
+        r = li.get(norm(c["name"]))
+        if r:
+            info.append(f"לינקדאין (הקשרים שלך): {r.get('position', '')} · {r.get('company', '')}")
+        hits = [m for m in g.get(cid, []) if ROLE_RE.search(m["text"])][-a.lines:]
+        if not info and not hits:
+            continue
+        meta = f"{n} הודעות · מאז {dt.date.fromtimestamp(s['first']).strftime('%m.%Y')} · אחרונה {ago_txt(s['last'])}"
+        blocks.append(head(M, c, meta) + "\n" + "\n".join("- " + x for x in info) + ("\n" if info and hits else "")
+                      + "\n".join(line(m, 400) for m in hits))
+    rooms = sorted(overlap.items(), key=lambda kv: -len(kv[1]))[:20]
+    if rooms:
+        blocks.append("## חדרים: קבוצות שבהן נמצאים הכי הרבה אנשים שאתה מדבר איתם בפרטי\n" + "\n".join(
+            f"- [{gid}] {M.chat_name(M.chats[gid])}: {len(ids)} אנשים ({', '.join(M.chat_name(M.chats[x]) for x in ids[:6])}"
+            + (" ..." if len(ids) > 6 else "") + ")" for gid, ids in rooms))
+    intro = (f"{len(blocks)} אנשים שיש לך איתם קשר אמיתי ב-{a.days} הימים האחרונים (לפחות {a.min} הודעות), מהקשר הכי חזק. "
+             "לכל אחד: באילו קבוצות הוא חבר, פרופיל העסק והשורה 'אודות' בוואטסאפ, ומשפטים מהשיחות על עבודה, תפקידים ומי מכיר את מי. "
+             "המטרה: חיבורים שלא חשבת עליהם. מי עובד איפה, מי מכיר את מי, ודרך מי אפשר להגיע ללקוחות מהפרופיל. "
+             "רק מה שכתוב כאן. לא מחפשים אנשים באינטרנט, ולא מסיקים דברים אישיים.")
+    write_pack("people", "מי האנשים שלך: חיבורים", intro, blocks, M)
+
+
+def cmd_linkedin(a):
+    """Your own LinkedIn connections export (Connections.csv) -> imports/linkedin.json, matched by name in 'people'."""
+    import csv
+    src = Path(a.file).expanduser()
+    if src.suffix.lower() == ".zip":
+        with zipfile.ZipFile(src) as z:
+            name = next((n for n in z.namelist() if n.lower().endswith("connections.csv")), None)
+            if not name:
+                die("no Connections.csv inside the zip")
+            raw = z.read(name).decode("utf-8-sig", "replace")
+    else:
+        raw = src.read_text(encoding="utf-8-sig", errors="replace")
+    lines = raw.splitlines()
+    start = next((i for i, l in enumerate(lines) if l.startswith("First Name")), None)
+    if start is None:
+        die("this does not look like LinkedIn's Connections.csv")
+    rows = []
+    for r in csv.DictReader(lines[start:]):
+        name = f"{r.get('First Name', '').strip()} {r.get('Last Name', '').strip()}".strip()
+        if name:
+            rows.append({"name": name, "company": (r.get("Company") or "").strip(), "position": (r.get("Position") or "").strip()})
+    IMPORTS.mkdir(parents=True, exist_ok=True)
+    (IMPORTS / "linkedin.json").write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    say(f"imported {len(rows)} LinkedIn connections. 'people' now shows role and company for names that match.")
 
 
 # ---------------------------------------------------------------- dashboard
@@ -1020,9 +1186,16 @@ def main():
     sp = add("export", cmd_export, days={"type": int, "default": 30}, chat={"default": ""})
     sp.add_argument("--all", action="store_true")
     sp.add_argument("--groups", action="store_true")
-    sp = add("voice", cmd_voice, days={"type": int, "default": 14}, limit={"type": int, "default": 60})
+    sp = add("voice", cmd_voice, days={"type": int, "default": 14}, hours={"type": int, "default": 0},
+             limit={"type": int, "default": 80}, chat={"default": ""})
     sp.add_argument("--groups", action="store_true")
+    sp.add_argument("--from-packs", dest="from_packs", action="store_true")
+    sp.add_argument("--pack-only", dest="pack_only", action="store_true")
     add("voice-setup", cmd_voice_setup)
+    add("people", cmd_people, days={"type": int, "default": 365}, min={"type": int, "default": 15},
+        limit={"type": int, "default": 80}, lines={"type": int, "default": 6})
+    sp = add("linkedin", cmd_linkedin)
+    sp.add_argument("file")
     sp = add("import", cmd_import, me={"default": ""})
     sp.add_argument("file")
     sp = add("dashboard", cmd_dashboard)
